@@ -1,0 +1,8 @@
+sistema_atendimento
+analista
+*.o
+atendidos_pids.txt
+*.log
+.DS_Store
+.vscode/
+.idea/
