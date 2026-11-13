@@ -1,8 +1,17 @@
+# binários
 sistema_atendimento
-analista
+cliente
 *.o
-atendidos_pids.txt
+
+# arquivos gerados em tempo de execução
+lng.txt
+lng.txt.tmp
+demanda.txt
+analista.pid
+pids_atendidos.txt
 *.log
+
+# editores / sistema
 .DS_Store
 .vscode/
 .idea/

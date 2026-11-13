@@ -1,156 +1,165 @@
-# 🚀 Simulação de Atendimento Multiprocesso e Multithread em C
+# Simulação de Atendimento ao Cliente — Trabalho 1 (Sistemas Operacionais, CK0234)
 
-Bem-vindo ao repositório do **Sistema de Simulação de Atendimento ao Cliente**! 
+Simulação do atendimento a clientes com **threads de usuário feitas na mão** (troca de contexto com
+`ucontext`), **processos** separados para o Cliente e para o Analista, **sinais** (`SIGSTOP`, `SIGCONT`,
+`SIGUSR1`, `SIGTERM`) e **semáforos nomeados POSIX** para coordenar o acesso aos arquivos compartilhados.
 
-Este projeto é uma aplicação desenvolvida em C para sistemas POSIX (Linux), projetada para demonstrar conceitos avançados de **Sistemas Operacionais**, como concorrência cooperativa via `ucontext.h`, comunicação entre processos (IPC) com sinais (`SIGUSR1`), gerência de arquivos compartilhados thread-safe e análise estatística baseada na Teoria das Filas.
-
----
-
-## 📌 Sumário
-1. [Visão Geral da Arquitetura](#-visão-geral-da-arquitetura)
-2. [Conceitos Fundamentais](#-conceitos-fundamentais)
-3. [Regras de Negócio e Tolerância](#-regras-de-negócio-e-tolerância)
-4. [Estrutura do Projeto](#-estrutura-do-projeto)
-5. [Como Compilar e Executar](#-como-compilar-e-executar)
-6. [Cenários de Teste e Validação](#-cenários-de-teste-e-validação)
-7. [Aprendizados e Teoria das Filas](#-aprendizados-e-teoria-das-filas)
+Nenhuma biblioteca de paralelismo é usada: o escalonador das threads é implementado em
+`src/scheduler.c`, como o enunciado exige.
 
 ---
 
-## 🏗 Visão Geral da Arquitetura
-
-O sistema opera com uma arquitetura híbrida que combina **multiprocessamento (processos SO)** e **multithreading em espaço de usuário (User-level Threads)**:
+## Arquitetura
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│               Processo Principal de Atendimento             │
-│                                                             │
-│  ┌────────────────────┐            ┌─────────────────────┐  │
-│  │ Thread: Recepção   │            │ Thread: Atendente   │  │
-│  │ (Gera clientes)    │            │ (Consome a fila)    │  │
-│  └─────────┬──────────┘            └──────────┬──────────┘  │
-│            │   Fila Global de Clientes        │             │
-│            └───────────────► 📥 ──────────────┘             │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                Grava log      │  Envia Sinais
-             no arquivo audit  │  SIGUSR1
-                               ▼
-            ┌────────────────────────────────────┐
-            │         Processo Analista          │
-            │  (Processa logs & exibe no stdout) │
-            └────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Processo 1 — ATENDIMENTO  (escalonador cooperativo)     │
+│                                                          │
+│  Thread 1 — Atendente          Thread 2 — Recepção       │
+│  - lê o 1º da fila             - cria /sem_atend e       │
+│  - acorda o cliente (SIGCONT)    /sem_block              │
+│  - espera o atendimento        - cria os processos       │
+│  - fecha /sem_block              cliente (fork + exec)   │
+│  - grava o PID no LNG          - sorteia a prioridade    │
+│  - abre /sem_block               (50% / 50%)             │
+│  - calcula a satisfação        - lê demanda.txt          │
+│  - tira o cliente da fila      - enfileira               │
+│  - acorda o Analista           - pausa com 100 na fila   │
+│          │                             │                 │
+│          └────── Fila de clientes ◄────┘                 │
+│                                                          │
+│  Thread 3 — Monitor (só quando N = 0): lê a tecla "s"    │
+└───────────┬──────────────────────────────┬───────────────┘
+            │ grava (protegido             │ SIGCONT / espera o fim
+            │ por /sem_block)              ▼
+      ┌─────▼────────┐            ┌─────────────────────┐
+      │  lng.txt     │            │ Processo 3 — CLIENTE│
+      │  (Lista de   │            │ (./cliente, código  │
+      │   Números    │            │  dado pelo professor)│
+      │   Gerados)   │            │ escreve demanda.txt,│
+      └─────┬────────┘            │ dorme (SIGSTOP),    │
+            │ lê e apaga          │ fecha /sem_atend,   │
+            │ (protegido)         │ usleep, abre, sai   │
+      ┌─────▼────────────┐        └─────────────────────┘
+      │ Processo 2 —     │ ◄── SIGUSR1 (acorda)
+      │ ANALISTA         │ ◄── SIGTERM (encerra esvaziando)
+      │ imprime até 10   │
+      │ PIDs por vez     │
+      └──────────────────┘
 ```
 
 ---
 
-## 💡 Conceitos Fundamentais
+## Como compilar e executar
 
-* **Threads Cooperativas (`ucontext.h`):** Em vez de utilizar threads do kernel (`pthread`), o sistema faz a troca de contexto explicitamente usando a API POSIX `ucontext.h` (funções `getcontext`, `makecontext`, `swapcontext`). Isso exige trocas de turno manuais através da função `yield_thread()` para que o tempo de CPU seja compartilhado de forma justa sem travar o processo principal.
-* **Comunicação Interprocessos (IPC via `SIGUSR1`):** A cada atendimento finalizado, o processo de atendimento envia um sinal `SIGUSR1` para o processo **Analista**, notificando que há novos registros para processamento.
-* **Audit Trail Thread-Safe:** A troca de dados detalhados entre o atendente e o analista ocorre por meio de um arquivo de log compartilhado (`ARQUIVO_PIDS`). O Analista lê continuamente o arquivo usando controle preciso de *file pointer* (`fgets`) para garantir consistência.
+Requisitos: Linux (ou WSL), `gcc` e `make`.
+
+```bash
+make clean && make          # gera ./sistema_atendimento e ./cliente
+./sistema_atendimento <N> <X>
+```
+
+* **N** — número de clientes a gerar. **0 = infinito**.
+* **X** — paciência base, em milissegundos. Prioridade alta espera `X/2`; prioridade baixa espera `X`.
+
+```bash
+./sistema_atendimento 50 1000   # 50 clientes, paciência base de 1 s
+./sistema_atendimento 0 1000    # infinito: aperte "s" para encerrar
+make run                        # atalho para 50 1000
+make run-infinito               # atalho para 0 1000
+```
+
+Os dois binários precisam estar na mesma pasta: o Atendimento executa `./cliente`.
+
+### Arquivos criados em tempo de execução
+| Arquivo | Para que serve |
+|---|---|
+| `demanda.txt` | o cliente escreve o tempo de que precisa; a Recepção lê e apaga |
+| `lng.txt` | Lista de Números Gerados: PIDs atendidos, protegida por `/sem_block` |
+| `analista.pid` | PID do processo Analista, gravado por ele ao nascer |
 
 ---
 
-## 📐 Regras de Negócio e Tolerância
+## Decisões de implementação
 
-Cada cliente gerado na recepção possui atributos únicos e um tempo máximo de paciência:
+**Escalonador (`src/scheduler.c`).** Round-robin cooperativo com `getcontext`/`makecontext`/`swapcontext`.
+Toda troca passa pelo contexto do escalonador: `yield_thread()` volta para ele e ele escolhe a próxima
+thread PRONTA. Cada thread roda dentro de um trampolim que, ao fim do corpo, marca o TCB como
+`TERMINADA` e devolve o controle — por isso `escalonar()` **retorna ao `main`** quando todas acabam, que é
+o que permite esvaziar o arquivo LNG, imprimir o relatório e liberar tudo.
 
-* **Prioridade 1 (Alta Prioridade):** Tolerância máxima reduzida pela metade ($\text{Paciência} = \frac{X}{2}$).
-* **Prioridade 2 (Baixa Prioridade):** Tolerância máxima integral ($\text{Paciência} = X$).
+**Espera sem bloquear.** Num escalonador cooperativo, qualquer chamada bloqueante paralisa o processo
+inteiro. Por isso toda espera é `WNOHANG`/`sem_trywait` + `yield_thread()`: esperar o cliente parar
+(`waitpid(..., WUNTRACED|WNOHANG)`), esperar o fim do atendimento e esperar o semáforo do LNG.
 
-### Cálculo de Satisfação
-$$\text{Tempo de Espera} = \text{Tempo de Atendimento} - \text{Tempo de Chegada}$$
-* Se $\text{Tempo de Espera} \le \text{Paciência Máxima} \rightarrow \mathbf{SATISFEITO}$
-* Se $\text{Tempo de Espera} > \text{Paciência Máxima} \rightarrow \mathbf{INSATISFEITO}$
+**Fim do atendimento.** O cliente fecha `/sem_atend`, dorme e abre o semáforo imediatamente antes de
+terminar — o fim do processo cliente é, portanto, o mesmo instante em que o semáforo reabre. O Atendente
+espera pelo fim do processo em vez de disputar o semáforo: se ele também fizesse `sem_wait`, poderia tomar
+a vez do próprio cliente e travar o atendimento.
 
-No final da execução, o relatório exibe a **Taxa de Satisfação Geral** ($\frac{\text{Total Satisfeitos}}{\text{Total Atendidos}} \times 100$).
+**Exclusão mútua do LNG.** `/sem_block` é fechado em volta de toda a escrita do Atendente e de todo o ciclo
+ler-imprimir-reescrever do Analista. Sem isso, o que fosse escrito entre a leitura e a reescrita seria
+apagado sem nunca ter sido impresso.
+
+**Analista sem corrida de sinal.** `SIGUSR1`/`SIGTERM` ficam bloqueados e a espera é feita com
+`sigsuspend`, em vez de `pause()`. Com `pause()`, um sinal que chegasse entre o teste da variável e a
+chamada seria perdido e o Analista dormiria para sempre. A saída usa `setvbuf(..., _IOLBF, ...)` para que
+os PIDs apareçam mesmo quando a saída do programa é redirecionada para um arquivo ou um pipe.
+
+**Estruturas de dados.** `Cliente` guarda exatamente os quatro campos do diagrama (PID, hora de chegada,
+prioridade, tempo para atendimento). A fila é uma lista encadeada com ponteiro para o fim (`O(1)` para
+enfileirar e desenfileirar). O Atendente consulta a frente, atende e só então remove, como no diagrama.
+
+**Prioridade.** No enunciado ela só define a paciência (alta = `X/2`, baixa = `X`); a ordem de atendimento
+continua FIFO.
+
+**Encerramento com "s" (N = 0).** Uma terceira thread lê o teclado em modo não canônico e não bloqueante.
+Ao receber "s": as threads param, os clientes que ficaram na fila são encerrados e descartados do cálculo,
+o Analista é acordado quantas vezes forem necessárias até o LNG ficar vazio e só então recebe `SIGTERM`.
 
 ---
 
-## 📁 Estrutura do Projeto
+## Resultados medidos
+
+Medições em Linux (container `gcc:13`), executando do disco local:
+
+| Execução | Clientes atendidos | Taxa de satisfação | Tempo total |
+|---|---|---|---|
+| `./sistema_atendimento 20 1000` | 20 | 100,00% | 9 ms |
+| `./sistema_atendimento 50 1000` | 50 | 100,00% | 22 ms |
+| `./sistema_atendimento 100 1000` | 100 | 100,00% | 44 ms |
+| `./sistema_atendimento 50 1` | 50 | 84,00% | — |
+| `./sistema_atendimento 0 1000`, "s" após 3 s | 91 | 100,00% | 3029 ms |
+
+Em todas as execuções o Analista imprimiu **todos** os PIDs atendidos (20/20, 50/50, 100/100, 91/91),
+inclusive com a saída redirecionada para arquivo, e o `lng.txt` terminou vazio.
+Com paciência muito curta (`X = 1` ms) a taxa cai para 84%, o que mostra que a métrica realmente mede a
+espera e não está fixa em 100%.
+
+> O tempo de execução depende do custo de `fork`+`exec` do sistema de arquivos onde os binários estão.
+> Rodando a partir de um diretório montado do Windows no Docker, a mesma execução de 50 clientes levou
+> 1879 ms em vez de 22 ms. Para medir desempenho, rode em disco Linux nativo.
+
+---
+
+## Estrutura do projeto
 
 ```text
 .
-├── Makefile                # Automação de compilação
-├── README.md               # Documentação do projeto
-├── include/                # Cabeçalhos (.h)
-│   ├── atendente.h
-│   ├── cliente.h
-│   ├── recepcao.h
-│   └── scheduler.h
-└── src/                    # Código fonte (.c)
-    ├── analista.c          # Processo secundário (leitor de auditoria)
-    ├── atendente.c         # Thread consumidora de clientes
-    ├── cliente.c           # Lógica de criação de structs de clientes
-    ├── main.c              # Ponto de entrada e tratamento de argumentos
-    ├── recepcao.c          # Thread produtora de clientes
-    └── scheduler.c         # Alternância de contexto (ucontext)
+├── makefile
+├── README.md
+├── include/
+│   ├── analista.h    ├── atendente.h   ├── cliente.h
+│   ├── comum.h       ├── fila.h        ├── monitor.h
+│   ├── recepcao.h    └── scheduler.h
+└── src/
+    ├── main.c          # processo Atendimento: fork do Analista, threads, relatório
+    ├── scheduler.c     # escalonador cooperativo (ucontext)
+    ├── recepcao.c      # thread Recepção: semáforos, criação e enfileiramento
+    ├── atendente.c     # thread Atendente: atende, grava no LNG, calcula satisfação
+    ├── analista.c      # processo Analista: imprime e apaga os PIDs do LNG
+    ├── monitor.c       # thread monitor do teclado ("s") e estado de encerramento
+    ├── cliente.c       # criação do processo cliente (fork + exec) pela Recepção
+    ├── fila.c          # fila encadeada de clientes
+    └── cliente_proc.c  # Processo Cliente — CÓDIGO DADO PELO PROFESSOR, sem alterações
 ```
-
----
-
-## 🛠 Como Compilar e Executar
-
-### Pré-requisitos
-* Sistema operacional POSIX (Linux, WSL ou macOS).
-* Compilador `gcc` e utilitário `make`.
-
-### Compilando o Projeto
-Para limpar builds antigos e compilar o código fonte:
-```bash
-make clean && make
-```
-
-### Executando a Simulação
-O programa aceita dois parâmetros principais via linha de comando:
-```bash
-./sistema_atendimento <N> <X>
-```
-* **`N`**: Número total de clientes a serem gerados no lote (ex: `50`).
-* **`X`**: Tempo limite de paciência base em milissegundos (ex: `800`).
-
-Exemplo:
-```bash
-./sistema_atendimento 50 800
-```
-
----
-
-## 📊 Cenários de Teste e Validação
-
-Você pode validar a estabilidade e a sensibilidade matemática do sistema ajustando os parâmetros $N$ e $X$:
-
-### 1. Teste de Carga Pesada / Colapso de Fila ($\text{Satisfação} < 10\%$)
-Ao usar uma paciência baixa em relação à taxa de acúmulo da fila, os clientes estouram a paciência rapidamente:
-```bash
-./sistema_atendimento 50 200
-# Resultado esperado: Satisfação em torno de 4% a 10%
-```
-
-### 2. Teste de Equilíbrio / Carga Moderada ($\text{Satisfação} \approx 60\%$)
-Ajustando o limite $X$ para um valor intermediário:
-```bash
-./sistema_atendimento 50 400
-# Resultado esperado: Satisfação em torno de 60%
-```
-
-### 3. Teste de Alto Desempenho ($\text{Satisfação} > 80\%$)
-Aumentando a paciência base $X$, a fila consegue absorver a demanda com poucas insatisfações:
-```bash
-./sistema_atendimento 50 800
-# Resultado esperado: Satisfação em torno de 85% a 90%
-```
-
----
-
-## 🎓 Aprendizados e Teoria das Filas
-
-Durante a construção e validação deste projeto, observamos conceitos clássicos de **Teoria das Filas (Modelo M/M/1)**:
-
-1. **Taxa de Chegada ($\lambda$) vs. Taxa de Serviço ($\mu$):** Se a taxa com que os clientes chegam for maior do que a velocidade com que o atendente processa a fila, o tempo de espera acumulado cresce de forma linear/exponencial, degradando a satisfação do sistema.
-2. **Delays Cooperativos vs. Blocking Syscalls:** Em sistemas baseados em threads em espaço de usuário (`ucontext.h`), chamadas bloqueantes clássicas como `usleep()` paralisam o processo inteiro do SO. A solução adotada foi o uso de **loops de espera cooperativa com `yield_thread()`**, garantindo o escalonamento alternado de CPU em tempo real.
-
----
-
-✨ *Desenvolvido para estudo de Concorrência e Sistemas Operacionais.*

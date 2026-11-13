@@ -1,6 +1,7 @@
 #include "../include/fila.h"
 
-Fila* inicializar_fila() {
+Fila* inicializar_fila(void)
+{
     Fila *f = (Fila*) malloc(sizeof(Fila));
     if (!f) {
         perror("Erro ao alocar fila");
@@ -12,11 +13,20 @@ Fila* inicializar_fila() {
     return f;
 }
 
-bool fila_vazia(Fila *f) {
+bool fila_vazia(Fila *f)
+{
     return (f->inicio == NULL);
 }
 
-void enfileirar(Fila *f, Cliente *c) {
+int fila_tamanho(Fila *f)
+{
+    return f->tamanho;
+}
+
+/* Insere no fim: a fila é FIFO. A prioridade do cliente não muda a ordem de
+ * atendimento — no enunciado ela só define a paciência (X/2 para alta, X para baixa). */
+void enfileirar(Fila *f, Cliente *c)
+{
     No *novo = (No*) malloc(sizeof(No));
     if (!novo) {
         perror("Erro ao alocar nó da fila");
@@ -25,40 +35,42 @@ void enfileirar(Fila *f, Cliente *c) {
     novo->cliente = c;
     novo->prox = NULL;
 
-    // Se quiser dar preferência real para alta prioridade na entrada:
-    // (Opcional, mas garante que alta prioridade fure a fila de baixa)
-    if (c->prioridade == PRIORIDADE_ALTA && f->inicio != NULL) {
-        // Insere logo após o início ou trata prioridade aqui
-    }
-
-    if (fila_vazia(f)) {
+    if (fila_vazia(f))
         f->inicio = novo;
-    } else {
+    else
         f->fim->prox = novo;
-    }
+
     f->fim = novo;
     f->tamanho++;
 }
 
-Cliente* desenfileirar(Fila *f) {
-    if (fila_vazia(f)) {
+/* Consulta o primeiro da fila sem removê-lo. O Atendente atende a partir daqui e
+ * só remove depois, como no diagrama. */
+Cliente* fila_frente(Fila *f)
+{
+    return fila_vazia(f) ? NULL : f->inicio->cliente;
+}
+
+Cliente* desenfileirar(Fila *f)
+{
+    if (fila_vazia(f))
         return NULL;
-    }
 
     No *temp = f->inicio;
     Cliente *c = temp->cliente;
 
     f->inicio = f->inicio->prox;
-    if (f->inicio == NULL) {
+    if (f->inicio == NULL)
         f->fim = NULL;
-    }
 
     free(temp);
     f->tamanho--;
     return c;
 }
 
-void destruir_fila(Fila *f) {
+void destruir_fila(Fila *f)
+{
+    if (!f) return;
     while (!fila_vazia(f)) {
         Cliente *c = desenfileirar(f);
         free(c);
