@@ -1,20 +1,37 @@
-CC = gcc
-CFLAGS = -Wall -g -Iinclude
+CC      = gcc
+CFLAGS  = -Wall -Wextra -g -Iinclude
+# -pthread entra só por causa de sem_open/sem_wait: em glibc anterior à 2.34 os
+# semáforos POSIX ficam na libpthread. Nenhuma thread de biblioteca é usada — as
+# threads do trabalho são de usuário, feitas na mão com ucontext (src/scheduler.c).
+LDLIBS  = -pthread
 
-SRC = src/main.c src/cliente.c src/fila.c src/scheduler.c src/recepcao.c src/atendente.c src/analista.c
-OBJ = $(SRC:.c=.o)
-TARGET = sistema_atendimento
+SRC     = src/main.c src/cliente.c src/fila.c src/scheduler.c \
+          src/recepcao.c src/atendente.c src/analista.c src/monitor.c
+OBJ     = $(SRC:.c=.o)
+HDR     = $(wildcard include/*.h)
 
-all: $(TARGET)
+TARGET  = sistema_atendimento
+CLIENTE = cliente
+
+all: $(TARGET) $(CLIENTE)
 
 $(TARGET): $(OBJ)
-	$(CC) $(OBJ) -o $(TARGET)
+	$(CC) $(OBJ) -o $@ $(LDLIBS)
 
-%.o: %.c
+# Processo 3: código dado pelo professor, compilado como binário separado.
+$(CLIENTE): src/cliente_proc.c
+	$(CC) $(CFLAGS) src/cliente_proc.c -o $@ $(LDLIBS)
+
+%.o: %.c $(HDR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f src/*.o $(TARGET) pids_atendidos.txt
+	rm -f src/*.o $(TARGET) $(CLIENTE) lng.txt lng.txt.tmp demanda.txt analista.pid
 
 run: all
-	./$(TARGET) 20 1000
+	./$(TARGET) 50 1000
+
+run-infinito: all
+	./$(TARGET) 0 1000
+
+.PHONY: all clean run run-infinito
